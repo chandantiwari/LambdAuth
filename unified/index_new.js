@@ -18,7 +18,6 @@ var config = {
 var AWS = require('aws-sdk');
 var crypto = require('crypto');
 var DOC = require('dynamodb-doc');
-var dynamodb = new AWS.DynamoDB();
 var ses = new AWS.SES();
 var cognitoidentity = new AWS.CognitoIdentity();
 
@@ -96,13 +95,13 @@ function sendLostPasswordEmail(email, token, callback)
             Body: {
                 Html: {
                     Data: '<html><head>'
-                        + '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />'
-                        + '<title>' + subject + '</title>'
-                        + '</head><body>'
-                        + 'Please <a href="' + lostLink + '">click here to reset your password</a> or copy & paste the following link in a browser:'
-                        + '<br><br>'
-                        + '<a href="' + lostLink + '">' + lostLink + '</a>'
-                        + '</body></html>'
+                    + '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />'
+                    + '<title>' + subject + '</title>'
+                    + '</head><body>'
+                    + 'Please <a href="' + lostLink + '">click here to reset your password</a> or copy & paste the following link in a browser:'
+                    + '<br><br>'
+                    + '<a href="' + lostLink + '">' + lostLink + '</a>'
+                    + '</body></html>'
                 }
             }
         }
@@ -115,30 +114,17 @@ function createNewUser(name, email, password, salt, callback)
     crypto.randomBytes(len, function(err, token) {
         if (err) return fn(err);
         token = token.toString('hex');
-        dynamodb.putItem({
+
+        docClient.put({
             TableName: config.DDB_TABLE,
             Item: {
-                email: {
-                    S: email
-                },
-                created_at: {
-                    N: new Date().getTime()
-                },
-                name: {
-                    S: name
-                },
-                passwordHash: {
-                    S: password
-                },
-                passwordSalt: {
-                    S: salt
-                },
-                verified: {
-                    BOOL: false
-                },
-                verifyToken: {
-                    S: token
-                }
+                email: email,
+                created_at: new Date().getTime(),
+                name: name,
+                passwordHash: password,
+                passwordSalt: salt,
+                verified: false,
+                verifyToken: token
             },
             ConditionExpression: 'attribute_not_exists (email)'
 
@@ -162,7 +148,7 @@ function getUserByEmail(email, callback)
     params.TableName = config.DDB_TABLE;
     params.Key = {email : email};
 
-    docClient.getItem(params, function(error, data){
+    docClient.get(params, function(error, data){
         if(error)
         {
             return callback(error);
@@ -181,19 +167,15 @@ function getUserByEmail(email, callback)
 
 function updateUserToken(email, callback)
 {
-    dynamodb.updateItem({
+    docClient.update({
             TableName: config.DDB_TABLE,
             Key: {
-                email: {
-                    S: email
-                }
+                email: email
             },
             AttributeUpdates: {
                 verified: {
                     Action: 'PUT',
-                    Value: {
-                        BOOL: true
-                    }
+                    Value: true
                 },
                 verifyToken: {
                     Action: 'DELETE'
@@ -205,25 +187,19 @@ function updateUserToken(email, callback)
 
 function updatePasswordToken(email, password, salt, callback)
 {
-    dynamodb.updateItem({
+    docClient.update({
             TableName: config.DDB_TABLE,
             Key: {
-                email: {
-                    S: email
-                }
+                email: email
             },
             AttributeUpdates: {
                 passwordHash: {
                     Action: 'PUT',
-                    Value: {
-                        S: password
-                    }
+                    Value: password
                 },
                 passwordSalt: {
                     Action: 'PUT',
-                    Value: {
-                        S: salt
-                    }
+                    Value: salt
                 }
             }
         },
@@ -240,19 +216,15 @@ function storeLostPasswordToken(email, callback)
             return callback(err);
         }
         token = token.toString('hex');
-        dynamodb.updateItem({
+        docClient.update({
                 TableName: config.DDB_TABLE,
                 Key: {
-                    email: {
-                        S: email
-                    }
+                    email: email
                 },
                 AttributeUpdates: {
                     lostToken: {
                         Action: 'PUT',
-                        Value: {
-                            S: token
-                        }
+                        Value: token
                     }
                 }
             },
@@ -265,25 +237,19 @@ function storeLostPasswordToken(email, callback)
 
 function resetPassword(email, password, salt, callback)
 {
-    dynamodb.updateItem({
+    docClient.update({
             TableName: config.DDB_TABLE,
             Key: {
-                email: {
-                    S: email
-                }
+                email: email
             },
             AttributeUpdates: {
                 passwordHash: {
                     Action: 'PUT',
-                    Value: {
-                        S: password
-                    }
+                    Value: password
                 },
                 passwordSalt: {
                     Action: 'PUT',
-                    Value: {
-                        S: salt
-                    }
+                    Value: salt
                 },
                 lostToken: {
                     Action: 'DELETE'
@@ -307,88 +273,152 @@ function getCognitoToken(email, fn)
         });
 }
 
+function addNewProfile(email, profile, callback)
+{
+    getUserByEmail(email, function(err, response){
+
+        if(err)
+        {
+            console.log(JSON.stringify(err));
+            return callback(err);
+        }
+        else if(response.status)
+        {
+            console.log(JSON.stringify(response.data));
+            var profiles = response.data.profiles;
+            var params = {
+                TableName : config.DDB_TABLE,
+                Key : {email : email}
+             };
+            var noOfProfiles = 0;
+            var profiles = [];
+            if(response.data.profiles && response.data.profiles.length > 0)
+            {
+                console.log("Going for data addition");
+                profiles = response.data.profiles;
+                profiles.push(profile);
+                params.AttributeUpdates = {
+                    profiles : {
+                        Action : 'PUT',
+                        Value : profiles
+                    }
+                };
+            }
+            else
+            {
+                console.log("Creating first profile");
+                params.AttributeUpdates = {
+                    profiles : {
+                        Action : 'PUT',
+                        Value : [profile]
+                    }
+                };
+            }
+
+
+
+            docClient.update(params, function(e, data){
+                if(e)
+                {
+                    console.log(e);
+                    return callback(e);
+                }
+                else
+                {
+                    console.log(data);
+                    return callback(null, data)
+                }
+            });
+        }
+
+    });
+}
+
 exports.handler = function(event, context) {
     console.log(JSON.stringify(event));
     var operation = event.operation;
     var data = event.data;
     computeHash("hello", function(err, salt, hash) {
-
+        console.log("Compute HASH function");
         if(err)
         {
             console.log(err);
             return context.fail('Error in hash: ' + err);
         }
-
+        console.log("salt and hash "+ salt + " and "+ hash);
         createNewUser('Chandan Nov', 'vedicrishiastro@gmail.com', hash, salt, function(err, token){
-
+            console.log("Inside create new user");
             if(err)
             {
                 console.log(err);
                 return context.fail('Error in creating '+ err);
             }
 
-            console.log('Successfully created ! '+ token);
+            console.log('Successfully created ! '+ JSON.stringify(token));
+            sendVerificationEmail("vedicrishiastro@gmail.com", token, function(err, data){
+                console.log(JSON.stringify(data));
+                context.succeed(true);
+            });
 
-            context.succeed(true);
         });
 
     });
 
     /*switch(operation)
-    {
-        case 'CREATE_USER':
-            // compute password hash
-            // create and store user
-            // send verification email
-            async.waterfall([], function(error, response){
+     {
+     case 'CREATE_USER':
+     // compute password hash
+     // create and store user
+     // send verification email
+     async.waterfall([], function(error, response){
 
-            });
-            break;
+     });
+     break;
 
-        case 'VERIFY_USER':
-            // get user
-            // update user
-            async.waterfall([], function(error, response){
+     case 'VERIFY_USER':
+     // get user
+     // update user
+     async.waterfall([], function(error, response){
 
-            });
-            break;
+     });
+     break;
 
-        case 'AUTHENTICATE_USER':
-            // get user
-            // compute password hash
-            // check verification status
-            // get cognito token id
-            async.waterfall([], function(error, response){
+     case 'AUTHENTICATE_USER':
+     // get user
+     // compute password hash
+     // check verification status
+     // get cognito token id
+     async.waterfall([], function(error, response){
 
-            });
-            break;
-        case 'CHANGE_PASSWORD':
-            // get user
-            // compute hash for old password
-            // compute hash for new password
-            // update user password
-            async.waterfall([], function(error, response){
+     });
+     break;
+     case 'CHANGE_PASSWORD':
+     // get user
+     // compute hash for old password
+     // compute hash for new password
+     // update user password
+     async.waterfall([], function(error, response){
 
-            });
-            break;
-        case 'FORGOT_PASSWORD':
-            // get user
-            // store lost password token
-            // send lost password token email
-            async.waterfall([], function(error, response){
+     });
+     break;
+     case 'FORGOT_PASSWORD':
+     // get user
+     // store lost password token
+     // send lost password token email
+     async.waterfall([], function(error, response){
 
-            });
-            break;
+     });
+     break;
 
-        case 'RESET_PASSWORD':
-            // get user
-            // compute hash password
-            // update user password
-            async.waterfall([], function(error, response){
+     case 'RESET_PASSWORD':
+     // get user
+     // compute hash password
+     // update user password
+     async.waterfall([], function(error, response){
 
-            });
-            break;
+     });
+     break;
 
 
-    }*/
+     }*/
 };
